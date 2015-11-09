@@ -41,7 +41,8 @@ team_t team = {
 *************************************************************************/
 #define WSIZE       sizeof(void *)            /* word size (bytes) */
 #define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
-#define CHUNKSIZE   (1<<7)      /* initial heap size (bytes) = 128 bytes*/
+/* #define CHUNKSIZE   (1<<7)      #<{(| initial heap size (bytes) = 128 bytes|)}># */
+#define CHUNKSIZE   (1<<3)      /* initial heap size (bytes) = 128 bytes*/
 
 #define MAX(x,y) ((x) > (y)?(x) :(y))
 
