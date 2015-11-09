@@ -41,7 +41,7 @@ team_t team = {
 *************************************************************************/
 #define WSIZE       sizeof(void *)            /* word size (bytes) */
 #define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
-#define CHUNKSIZE   (1<<7)      /* initial heap size (bytes) */
+#define CHUNKSIZE   (1<<7)      /* initial heap size (bytes) = 128 bytes*/
 
 #define MAX(x,y) ((x) > (y)?(x) :(y))
 
@@ -64,25 +64,42 @@ team_t team = {
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
+#define LOGGING_LEVEL 1
+#define logg(level, args ...)    if(level <= LOGGING_LEVEL){ printf(args); printf("\n"); fflush(stdout);}
+
 void* heap_listp = NULL;
+
+/* Logging utility to bypass the stdout buffer, print out the message immediately */
+/* void logg(int level, char *arg, ...){ */
+/* 	if (level <= LOGGING_LEVEL){ */
+/* 		printf(arg); */
+/* 		printf("\n"); */
+/* 		#<{(| fflush(stdout); |)}># */
+/* 	} */
+/* } */
+
 
 /**********************************************************
  * mm_init
  * Initialize the heap, including "allocation" of the
- * prologue and epilogue
+ * prologue and epilogue. It allocates four words and
+ * set the heap_listp pointer to the beginning of third word.
  **********************************************************/
- int mm_init(void)
- {
-   if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1)
-         return -1;
-     PUT(heap_listp, 0);                         // alignment padding
-     PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));   // prologue header
-     PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));   // prologue footer
-     PUT(heap_listp + (3 * WSIZE), PACK(0, 1));    // epilogue header
-     heap_listp += DSIZE;
+int mm_init(void)
+{
+    logg(1, "============ mm_init() starts ==============");
+    if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1)
+        return -1;
+    PUT(heap_listp, 0);                         // alignment padding
+    PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));   // prologue header
+    PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));   // prologue footer
+    PUT(heap_listp + (3 * WSIZE), PACK(0, 1));    // epilogue header
+    heap_listp += DSIZE;
+    logg(1, "initial heap_listp: %p", heap_listp);
+    logg(2, "============ mm_init() ends ==============");
 
-     return 0;
- }
+    return 0;
+}
 
 /**********************************************************
  * coalesce
@@ -141,6 +158,7 @@ void *extend_heap(size_t words)
     if ( (bp = mem_sbrk(size)) == (void *)-1 )
         return NULL;
 
+    logg(1, "extend_heap extends words: %zx(h)(size: %zx(h)); new bp: %p", words, size, bp);
     /* Initialize free block header/footer and the epilogue header */
     PUT(HDRP(bp), PACK(size, 0));                // free block header
     PUT(FTRP(bp), PACK(size, 0));                // free block footer
@@ -164,9 +182,11 @@ void * find_fit(size_t asize)
     {
         if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
         {
+            logg(1, "find_fit() finds a fittable block at: %p for size: %zx(h)%zu(d)", bp, asize, asize);
             return bp;
         }
     }
+    logg(1, "find_fit() cannot find a free block with proper size.");
     return NULL;
 }
 
@@ -189,6 +209,8 @@ void place(void* bp, size_t asize)
  **********************************************************/
 void mm_free(void *bp)
 {
+    logg(2, "============ mm_free() starts ==============");
+	logg(1, "mm_free() with bp: %p; header: %x(h); footer: %x(h)", bp, GET(HDRP(bp)), GET(FTRP(bp)));
     if(bp == NULL){
       return;
     }
@@ -196,6 +218,7 @@ void mm_free(void *bp)
     PUT(HDRP(bp), PACK(size,0));
     PUT(FTRP(bp), PACK(size,0));
     coalesce(bp);
+    logg(2, "============ mm_free() ends ==============");
 }
 
 
@@ -209,6 +232,7 @@ void mm_free(void *bp)
  **********************************************************/
 void *mm_malloc(size_t size)
 {
+    logg(2, "============ mm_malloc() starts ==============");
     size_t asize; /* adjusted block size */
     size_t extendsize; /* amount to extend heap if no fit */
     char * bp;
@@ -234,6 +258,8 @@ void *mm_malloc(size_t size)
     if ((bp = extend_heap(extendsize/WSIZE)) == NULL)
         return NULL;
     place(bp, asize);
+    logg(1, "mm_malloc(%zx(h)%zu(d)) returns bp: %p; with actual size: %zx", size, size, bp, asize);
+    logg(2, "============ mm_malloc() ends ==============");
     return bp;
 
 }
