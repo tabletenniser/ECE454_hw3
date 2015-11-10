@@ -1,13 +1,15 @@
 /*
- * This implementation replicates the implicit list implementation
- * provided in the textbook
- * "Computer Systems - A Programmer's Perspective"
- * Blocks are never coalesced or reused.
- * Realloc is implemented directly using mm_malloc and mm_free.
- *
- * NOTE TO STUDENTS: Replace this header comment with your own header
- * comment that gives a high level description of your solution.
- */
+This file implements dynamic memory allocation functions (i.e malloc, free and
+realloc) using the segregated free list with the following high-level details:
+  1) An array of linkedlist (free_block_lists[]) is used to keep track of free
+     blocks of different sizes. free_block_lists[i] contains free blocks of size
+     1<<(i+SHIFT_SIZE) bytes. For example, if SHIFT_SIZE=2,then free_block_lists[6]
+     contains free blocks greater than 256 bytes but less than 512 bytes.
+  2) Two extra words are allocated for each free block after the header for the
+     pointers to the next free block and previous free block.
+  3) mm_realloc() implmentation is changed such that if the new size is smaller than
+     the current block, then keep the same block ptr and do not do "free() and malloc()".
+*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -70,8 +72,8 @@ team_t team = {
 #define PREV_FREE_BLKP(bp)  ((char*)bp)
 #define NEXT_FREE_BLKP(bp)  ((char*)bp + WSIZE)
 
-#define LOGGING_LEVEL 0
-/* #define LOGGING_LEVEL 6 */
+/* #define LOGGING_LEVEL 1 */
+#define LOGGING_LEVEL 6
 #define logg(level, args ...)    if(level <= LOGGING_LEVEL){ printf(args); printf("\n"); fflush(stdout);}
 
 void* heap_listp = NULL;        // Global heap pointer
@@ -95,44 +97,86 @@ int mm_check(void){
     int i = 0;
     char *iter;
     int fail = 0;
+
+    // Iterate through the list of free blocks and check: 1) un-aligned blocks; 2) in-consistant
+    // footer / header and 3) blocks that are not free.
     for (i = 0; i<NUM_OF_FREE_LISTS; i++){
         iter = free_block_lists[i];
-        /* while (iter!=NULL) { */
-        if (iter!=NULL) {
-            if (GET(FTRP(iter)) != GET(HDRP(iter))) {
-                printf("index: %d; bp: %p; header: %zx; footer: %zx", i, iter, GET(HDRP(iter)), GET(FTRP(iter)));
-               fail = 1;
-               break;
-            }
-            if (GET_ALLOC(HDRP(iter))) {
-                printf("index: %d; bp: %p; header: %zx", i, iter, GET(HDRP(iter)));
+        /* if (iter!=NULL) { */
+        while (iter!=NULL) {
+            if ((size_t)iter%8){
+                printf("FREEBLOCK ERROR: UN-ALIGNED BLOCK. bp: %p\n", iter);
                 fail = 1;
                 break;
             }
-            if (GET_ALLOC(FTRP(iter))) {
-                printf("index: %d; bp: %p; footer: %zx", i, iter, GET(FTRP(iter)));
+            if (GET(FTRP(iter)) != GET(HDRP(iter))) {
+                printf("FREEBLOCK ERROR: INCONSISTANCY FOOTER / HEADER. index: %d; bp: %p; header: %zx; footer: %zx\n", i, iter, GET(HDRP(iter)), GET(FTRP(iter)));
+                fail = 1;
+                break;
+            }
+            if (GET_ALLOC(HDRP(iter))) {
+                printf("FREEBLOCK ERROR: BLOCK NOT FREE. index: %d; bp: %p; header: %zx", i, iter, GET(HDRP(iter)));
                 fail = 1;
                 break;
             }
             iter = (char *)GET(NEXT_FREE_BLKP(iter));
-            if (iter!=NULL){
-                if (GET(FTRP(iter)) != GET(HDRP(iter))) {
-                    printf("index: %d; bp: %p; header: %zx; footer: %zx", i, iter, GET(HDRP(iter)), GET(FTRP(iter)));
-                    fail = 1;
-                    break;
-                }
-                if (GET_ALLOC(HDRP(iter))) {
-                    printf("index: %d; bp: %p; header: %zx", i, iter, GET(HDRP(iter)));
-                    fail = 1;
-                    break;
-                }
-                if (GET_ALLOC(FTRP(iter))) {
-                    printf("index: %d; bp: %p; footer: %zx", i, iter, GET(FTRP(iter)));
-                    fail = 1;
-                    break;
-                }
-            }
+            /* if (iter!=NULL){ */
+            /*     if (GET(FTRP(iter)) != GET(HDRP(iter))) { */
+            /*         printf("index: %d; bp: %p; header: %zx; footer: %zx", i, iter, GET(HDRP(iter)), GET(FTRP(iter))); */
+            /*         fail = 1; */
+            /*         break; */
+            /*     } */
+            /*     if (GET_ALLOC(HDRP(iter))) { */
+            /*         printf("index: %d; bp: %p; header: %zx", i, iter, GET(HDRP(iter))); */
+            /*         fail = 1; */
+            /*         break; */
+            /*     } */
+            /*     if (GET_ALLOC(FTRP(iter))) { */
+            /*         printf("index: %d; bp: %p; footer: %zx", i, iter, GET(FTRP(iter))); */
+            /*         fail = 1; */
+            /*         break; */
+            /*     } */
+            /* } */
         }
+    }
+    if (fail == 1){
+        printf("************** mm_check() FAILS!!!!!! ***********");
+        return 1;
+    }
+
+    // Iterate through the entire heap and check: 1) bp pointer actually lies inside the heap
+    // allocated using mem_sbrk(); 2) un-aligned blocks; 2) in-consistant footer / header;
+    // 3) free blocks that are not in the free list and 4) contiguour free blocks not coalesced.
+    void* start_heap = mem_heap_lo();
+    void* end_heap = mem_heap_hi();
+    for (iter = (char *)start_heap + DSIZE; GET_SIZE(HDRP(iter)) > 0; iter=NEXT_BLKP(iter)){
+        if (iter < (char *)start_heap) {
+            printf("HEAP ERROR: BLOCK POINTER BEFORE START OF HEAP. bp: %p\n", iter);
+            fail = 1;
+            break;
+        }
+        if (iter > (char *)end_heap) {
+            printf("HEAP ERROR: BLOCK POINTER AFTER END OF HEAP. bp: %p\n", iter);
+            fail = 1;
+            break;
+        }
+        if ((size_t)iter%8){
+            printf("HEAP ERROR: UN-ALIGNED BLOCK. bp: %p\n", iter);
+            fail = 1;
+            break;
+        }
+        if (GET(FTRP(iter)) != GET(HDRP(iter))) {
+            printf("HEAP ERROR: INCONSISTANCY FOOTER / HEADER. bp: %p; header: %zx; footer: %zx\n", iter, GET(HDRP(iter)), GET(FTRP(iter)));
+            fail = 1;
+            break;
+        }
+        if (!GET_ALLOC(HDRP(iter)) && !GET_ALLOC(HDRP(NEXT_BLKP(iter)))) {
+            printf("HEAP ERROR: CONTIGUOUS FREE BLOCKS FOUND. bp: %p; header: %zx; bp.next: %p; bp.next.header: %zx\n", iter, GET(HDRP(iter)), NEXT_BLKP(iter), GET(HDRP(NEXT_BLKP(iter))));
+            fail = 1;
+            break;
+        }
+
+
     }
     if (fail == 1){
         printf("************** mm_check() FAILS!!!!!! ***********");
@@ -376,8 +420,9 @@ void place(void* bp, size_t asize)
 void mm_free(void *bp)
 {
     logg(3, "============ mm_free() starts ==============");
+    if (LOGGING_LEVEL>0)
+        mm_check();
 	logg(1, "mm_free() with bp: %p; header: %zx(h); footer: %zx(h)", bp, GET(HDRP(bp)), GET(FTRP(bp)));
-    mm_check();
     if(bp == NULL){
       return;
     }
@@ -399,8 +444,9 @@ void mm_free(void *bp)
  **********************************************************/
 void *mm_malloc(size_t size)
 {
-    mm_check();
     logg(3, "============ mm_malloc() starts ==============");
+    if (LOGGING_LEVEL>0)
+        mm_check();
     size_t asize; /* adjusted block size */
     size_t extendsize; /* amount to extend heap if no fit */
     char * bp;
@@ -424,14 +470,13 @@ void *mm_malloc(size_t size)
 
     /* No fit found. Get more memory and place the block */
     extendsize = MAX(asize, CHUNKSIZE);
-    mm_check();
     if ((bp = extend_heap(extendsize/WSIZE)) == NULL)
         return NULL;
-    mm_check();
     place(bp, asize);
     logg(1, "mm_malloc(%zx(h)%zu(d)) returns bp: %p; with actual size: %zx", size, size, bp, asize);
+    if (LOGGING_LEVEL>0)
+        mm_check();
     logg(3, "============ mm_malloc() ends ==============");
-    mm_check();
     return bp;
 
 }
@@ -442,6 +487,9 @@ void *mm_malloc(size_t size)
  *********************************************************/
 void *mm_realloc(void *ptr, size_t size)
 {
+    logg(3, "============ mm_realloc() starts ==============");
+    if (LOGGING_LEVEL>0)
+        mm_check();
     /* If size == 0 then this is just free, and we return NULL. */
     if(size == 0){
       mm_free(ptr);
@@ -468,5 +516,6 @@ void *mm_realloc(void *ptr, size_t size)
       copySize = size;
     memcpy(newptr, oldptr, copySize);
     mm_free(oldptr);
+    logg(3, "============ mm_realloc() ends ==============");
     return newptr;
 }
