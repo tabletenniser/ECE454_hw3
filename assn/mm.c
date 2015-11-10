@@ -72,8 +72,8 @@ team_t team = {
 #define PREV_FREE_BLKP(bp)  ((char*)bp)
 #define NEXT_FREE_BLKP(bp)  ((char*)bp + WSIZE)
 
-/* #define LOGGING_LEVEL 1 */
-#define LOGGING_LEVEL 6
+#define LOGGING_LEVEL 0
+/* #define LOGGING_LEVEL 6 */
 #define logg(level, args ...)    if(level <= LOGGING_LEVEL){ printf(args); printf("\n"); fflush(stdout);}
 
 void* heap_listp = NULL;        // Global heap pointer
@@ -406,11 +406,20 @@ void * find_fit(size_t asize)
 void place(void* bp, size_t asize)
 {
     remove_free_block(bp);
-  /* Get the current block size */
-  size_t bsize = GET_SIZE(HDRP(bp));
+    /* Get the current block size */
+    size_t bsize = GET_SIZE(HDRP(bp));
 
-  PUT(HDRP(bp), PACK(bsize, 1));
-  PUT(FTRP(bp), PACK(bsize, 1));
+    // Create a block of the size difference and insert it into the free list.
+    if (bsize - asize > 8*DSIZE) {
+        PUT(HDRP(bp), PACK(asize, 1));
+        PUT(FTRP(bp), PACK(asize, 1));
+        PUT(HDRP(NEXT_BLKP(bp)), PACK(bsize-asize, 0));
+        PUT(FTRP(NEXT_BLKP(bp)), PACK(bsize-asize, 0));
+        add_free_block(NEXT_BLKP(bp));
+    } else {
+        PUT(HDRP(bp), PACK(bsize, 1));
+        PUT(FTRP(bp), PACK(bsize, 1));
+    }
 }
 
 /**********************************************************
