@@ -321,7 +321,7 @@ void *coalesce(void *bp)
     }
     else {            /* Case 4 */
         logg(2, "Case4: Both blocks are free.");
-        size += GET_SIZE(HDRP(PREV_BLKP(bp)))  + GET_SIZE(FTRP(NEXT_BLKP(bp)))  ;
+        size += GET_SIZE(HDRP(PREV_BLKP(bp)))  + GET_SIZE(HDRP(NEXT_BLKP(bp)))  ;
         remove_free_block(NEXT_BLKP(bp));
         remove_free_block(PREV_BLKP(bp));
         bp = PREV_BLKP(bp);
@@ -508,12 +508,40 @@ void *mm_realloc(void *ptr, size_t size)
     if (ptr == NULL)
       return (mm_malloc(size));
 
+    // If we can fit the new size into the old block, do it!
     void *oldptr = ptr;
     void *newptr;
     size_t copySize;
     size_t oldSize = GET_SIZE(HDRP(oldptr));
-    if (2*DSIZE + size < oldSize)
+    size_t asize;
+    if (size <= DSIZE)
+        asize = 2 * DSIZE;
+    else
+        asize = DSIZE * ((size + (DSIZE) + (DSIZE-1))/ DSIZE);
+    asize += DSIZE;     // For the prev / next free block.
+    if (asize < oldSize) {
+        logg(2, "Old pointer is enough. bp: %p; oldSize: %zx; newSize: %zx", oldptr, oldSize, asize);
+        logg(3, "============ mm_realloc() ends ==============");
         return oldptr;
+    }
+
+    // Extend the heap if it's the last element. Calibaration for realloc-bal.rep trace.
+    if (GET_SIZE(HDRP(NEXT_BLKP(oldptr))) == 0){
+        mm_check();
+        logg(2, "Last block, will extend the heap. bp: %p; oldSize: %zx; newSize: %zx", oldptr, oldSize, asize);
+        size_t words = asize / WSIZE;
+        asize = (words%2) ? (words+1) * WSIZE : words * WSIZE;
+        void *bp;
+
+        if ( (bp = mem_sbrk(asize-oldSize)) == (void *)-1 )
+            return NULL;
+        PUT(HDRP(oldptr), PACK(asize, 1));
+        PUT(FTRP(oldptr), PACK(asize, 1));
+        PUT(HDRP(NEXT_BLKP(oldptr)), PACK(0, 1));
+        mm_check();
+        logg(3, "============ mm_realloc() ends ==============");
+        return oldptr;
+    }
 
     newptr = mm_malloc(size);
     if (newptr == NULL)
