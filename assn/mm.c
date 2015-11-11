@@ -6,9 +6,13 @@ realloc) using the segregated free list with the following high-level details:
      1<<(i+SHIFT_SIZE) bytes. For example, if SHIFT_SIZE=2,then free_block_lists[6]
      contains free blocks greater than 256 bytes but less than 512 bytes.
   2) Two extra words are allocated for each free block after the header for the
-     pointers to the next free block and previous free block.
+     pointers to the next free block and previous free block. Theses two words locate
+     right after the HEADER section of each block.
   3) mm_realloc() implmentation is changed such that if the new size is smaller than
-     the current block, then keep the same block ptr and do not do "free() and malloc()".
+     the current block, then return the same block ptr and do not do "free() and malloc()".
+  4) mm_realloc() is also changed such that if the block is at the end of the heap, it extends
+     the heap and return the same pointer passed in instead of doing "free() and malloc()".
+     This solves the runtime blow up for realloc-bal.rep.
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,8 +47,7 @@ team_t team = {
 *************************************************************************/
 #define WSIZE       sizeof(void *)            /* word size (bytes) */
 #define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
-/* #define CHUNKSIZE   (1<<7)      #<{(| initial heap size (bytes) = 128 bytes|)}># */
-#define CHUNKSIZE   (1<<4)      /* initial heap size (bytes) = 16 bytes, two words*/
+#define CHUNKSIZE   (1<<5)      /* initial heap size (bytes) = 32 bytes, four words. This used to be 1<<7*/
 #define NUM_OF_FREE_LISTS 30
 #define SHIFT_SIZE 2
 
@@ -52,7 +55,6 @@ team_t team = {
 
 /* Pack a size and allocated bit into a word */
 #define PACK(size, alloc) ((size) | (alloc))
-
 /* Read and write a word at address p */
 #define GET(p)          (*(uintptr_t *)(p))
 #define PUT(p,val)      (*(uintptr_t *)(p) = (val))
@@ -69,29 +71,39 @@ team_t team = {
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
+/* Given block ptr bp, compute address of pointers to next and previous blocks */
 #define PREV_FREE_BLKP(bp)  ((char*)bp)
 #define NEXT_FREE_BLKP(bp)  ((char*)bp + WSIZE)
 
-#define LOGGING_LEVEL 0
-/* #define LOGGING_LEVEL 6 */
+/* Logging utility macros */
+#define LOGGING_LEVEL 0     // Max is 6.
 #define logg(level, args ...)    if(level <= LOGGING_LEVEL){ printf(args); printf("\n"); fflush(stdout);}
 
-void* heap_listp = NULL;        // Global heap pointer
-void* free_block_lists[NUM_OF_FREE_LISTS];     // An array of free blocks organized by sizes
+/* Global heap pointer */
+void* heap_listp = NULL;
+// An array of free blocks organized by sizes growed exponentially.
+void* free_block_lists[NUM_OF_FREE_LISTS];
 
-/* Logging utility to bypass the stdout buffer, print out the message immediately */
-/* void logg(int level, char *arg, ...){ */
-/* 	if (level <= LOGGING_LEVEL){ */
-/* 		printf(arg); */
-/* 		printf("\n"); */
-/* 		#<{(| fflush(stdout); |)}># */
-/* 	} */
-/* } */
+
+/*******************************************************************************************
+********************************************************************************************
+************************************* DEBUGGING FUNCTIONS **********************************
+********************************************************************************************
+*******************************************************************************************/
+
+/* OLD LOGGING FUNCTION (replaced by logg() macro above): Logging utility to bypass the stdout buffer, print out the message immediately */
+void logg_old(int level, char *arg, ...){
+    if (level <= LOGGING_LEVEL){
+        printf(arg);
+        printf("\n");
+        fflush(stdout);
+    }
+}
 
 /**********************************************************
  * mm_check
- * Check the consistency of the memory heap
- * Return nonzero if the heap is consistant.
+ * Check the consistency of the memory heap and free block list.
+ * Print error message and return nonzero if the heap is consistant.
  *********************************************************/
 int mm_check(void){
     int i = 0;
@@ -102,7 +114,6 @@ int mm_check(void){
     // footer / header and 3) blocks that are not free.
     for (i = 0; i<NUM_OF_FREE_LISTS; i++){
         iter = free_block_lists[i];
-        /* if (iter!=NULL) { */
         while (iter!=NULL) {
             if ((size_t)iter%8){
                 printf("FREEBLOCK ERROR: UN-ALIGNED BLOCK. bp: %p\n", iter);
@@ -120,23 +131,6 @@ int mm_check(void){
                 break;
             }
             iter = (char *)GET(NEXT_FREE_BLKP(iter));
-            /* if (iter!=NULL){ */
-            /*     if (GET(FTRP(iter)) != GET(HDRP(iter))) { */
-            /*         printf("index: %d; bp: %p; header: %zx; footer: %zx", i, iter, GET(HDRP(iter)), GET(FTRP(iter))); */
-            /*         fail = 1; */
-            /*         break; */
-            /*     } */
-            /*     if (GET_ALLOC(HDRP(iter))) { */
-            /*         printf("index: %d; bp: %p; header: %zx", i, iter, GET(HDRP(iter))); */
-            /*         fail = 1; */
-            /*         break; */
-            /*     } */
-            /*     if (GET_ALLOC(FTRP(iter))) { */
-            /*         printf("index: %d; bp: %p; footer: %zx", i, iter, GET(FTRP(iter))); */
-            /*         fail = 1; */
-            /*         break; */
-            /*     } */
-            /* } */
         }
     }
     if (fail == 1){
@@ -185,6 +179,11 @@ int mm_check(void){
     return 0;
 }
 
+/**********************************************************
+ * print_free_lists
+ * Iterates through the array of free blocks with different sizes.
+ * Print the list of free blocks at each index.
+ *********************************************************/
 void print_free_lists(){
     int i = 0;
     char *iter;
@@ -192,8 +191,8 @@ void print_free_lists(){
     for (i = 0; i<NUM_OF_FREE_LISTS; i++){
         iter = free_block_lists[i];
         printf("%d: ", i);
-        /* while (iter!=NULL) { */
-        if (iter!=NULL) {
+        while (iter!=NULL) {
+        /* if (iter!=NULL) { */
             printf("%p\t", iter);
             iter = (char *)GET(NEXT_FREE_BLKP(iter));
             if (iter!=NULL)
@@ -203,59 +202,58 @@ void print_free_lists(){
     }
 }
 
+
+/*******************************************************************************************
+********************************************************************************************
+************************************** UTILITY FUNCTIONS ***********************************
+********************************************************************************************
+*******************************************************************************************/
+
 /**********************************************************
- * mm_init
- * Initialize the heap, including "allocation" of the
- * prologue and epilogue. It allocates four words and
- * set the heap_listp pointer to the beginning of third word.
- **********************************************************/
-int mm_init(void)
-{
-    logg(1, "============ mm_init() starts ==============");
-    if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1)
-        return -1;
-    PUT(heap_listp, 0);                         // alignment padding
-    PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));   // prologue header
-    PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));   // prologue footer
-    PUT(heap_listp + (3 * WSIZE), PACK(0, 1));    // epilogue header
-    heap_listp += DSIZE;
-    logg(1, "initial heap_listp: %p", heap_listp);
-    // Initialize the segregated free lists.
-    int i;
-    for (i = 0; i < NUM_OF_FREE_LISTS; i++)
-        free_block_lists[i]=NULL;
-    logg(3, "============ mm_init() ends ==============");
-
-    return 0;
-}
-
+ * add_free_block
+ * utility function that inserts the bp block to the
+ * linkedlist of free blocks.
+ *********************************************************/
 void add_free_block(void *bp){
     logg(4, "============ add_free_block() starts ==============");
+
+    // Find the proper index to insert the block.
     int free_list_i = 0;
     int size = GET_SIZE(HDRP(bp));
-    while (size > (1 << (free_list_i+SHIFT_SIZE))){
+    while (size > (1 << (free_list_i-SHIFT_SIZE))){
         free_list_i++;
     }
+
+    // Add block from bp to the linkedlist of free_block_lists.
     if (free_block_lists[free_list_i])
         PUT(PREV_FREE_BLKP(free_block_lists[free_list_i]), (uintptr_t)bp);
     PUT(NEXT_FREE_BLKP(bp), (uintptr_t)free_block_lists[free_list_i]);
     PUT(PREV_FREE_BLKP(bp), (uintptr_t)NULL);
     free_block_lists[free_list_i]=bp;
+
     logg(5, "free_list_i is: %d; size is: %d; bp is: %p", free_list_i, size, bp);
     logg(5, "next of bp is: %zx; prev of bp is: %zx", GET(NEXT_FREE_BLKP(bp)), GET(PREV_FREE_BLKP(bp)));
     logg(4, "============ add_free_block() ends ==============");
     return;
 }
 
-// TODO: COMMENT
+/**********************************************************
+ * remove_free_block
+ * utility function that removes the bp block to the
+ * linkedlist of free blocks.
+ *********************************************************/
 void remove_free_block(void *bp){
     logg(4, "============ remove_free_block() starts ==============");
     logg(5, "bp: %p;prev blk ptr: %zx;next blk ptr: %zx", bp, GET(PREV_FREE_BLKP(bp)), GET(NEXT_FREE_BLKP(bp)));
+
+    // Find the proper index where the block should locates.
     int free_list_i = 0;
     int size = GET_SIZE(HDRP(bp));
-    while (size > (1 << (free_list_i+SHIFT_SIZE))){
+    while (size > (1 << (free_list_i-SHIFT_SIZE))){
         free_list_i++;
     }
+
+    // Remove the block from the doubly-linked linkedlist.
     char *next_block_ptr = (char *)GET(NEXT_FREE_BLKP(bp));
     char *prev_block_ptr = (char *)GET(PREV_FREE_BLKP(bp));
     // Case for only one free block
@@ -358,11 +356,7 @@ void *extend_heap(size_t words)
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));        // new epilogue header
     add_free_block(bp);
     return bp;
-
-    /* Coalesce if the previous block was free */
-    /* return coalesce(bp); */
 }
-
 
 /**********************************************************
  * find_fit
@@ -374,17 +368,8 @@ void * find_fit(size_t asize)
 {
     void *bp;
     int free_list_i=0;
-    /* for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) */
-    /* { */
-    /*     if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) */
-    /*     { */
-    /*         logg(1, "find_fit() finds a fittable block at: %p for size: %zx(h)%zu(d)", bp, asize, asize); */
-    /*         return bp; */
-    /*     } */
-    /* } */
     for (free_list_i = 0; free_list_i<NUM_OF_FREE_LISTS; free_list_i++){
-        // 1<<(free_list_i+2) so that free_block_lists[0] contains the free blocks of size 4 words.
-        if ((1<<(free_list_i+SHIFT_SIZE-1))<asize){
+        if ((1<<(free_list_i-SHIFT_SIZE-1))<asize){
             continue;
         }
         bp = free_block_lists[free_list_i];
@@ -401,7 +386,8 @@ void * find_fit(size_t asize)
 
 /**********************************************************
  * place
- * Mark the block as allocated
+ * Mark the block as allocated.
+ * Also create a new free block of the size difference if possible.
  **********************************************************/
 void place(void* bp, size_t asize)
 {
@@ -422,6 +408,39 @@ void place(void* bp, size_t asize)
     }
 }
 
+
+/*******************************************************************************************
+********************************************************************************************
+***************************************** MAIN FUNCTIONS ***********************************
+********************************************************************************************
+*******************************************************************************************/
+
+/**********************************************************
+ * mm_init
+ * Initialize the heap, including "allocation" of the
+ * prologue and epilogue. It allocates four words and
+ * set the heap_listp pointer to the beginning of third word.
+ **********************************************************/
+int mm_init(void)
+{
+    logg(1, "============ mm_init() starts ==============");
+    if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1)
+        return -1;
+    PUT(heap_listp, 0);                         // alignment padding
+    PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));   // prologue header
+    PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));   // prologue footer
+    PUT(heap_listp + (3 * WSIZE), PACK(0, 1));    // epilogue header
+    heap_listp += DSIZE;
+    logg(1, "initial heap_listp: %p", heap_listp);
+    // Initialize the segregated free lists.
+    int i;
+    for (i = 0; i < NUM_OF_FREE_LISTS; i++)
+        free_block_lists[i]=NULL;
+    logg(3, "============ mm_init() ends ==============");
+
+    return 0;
+}
+
 /**********************************************************
  * mm_free
  * Free the block and coalesce with neighbouring blocks
@@ -435,10 +454,13 @@ void mm_free(void *bp)
     if(bp == NULL){
       return;
     }
+
+    // Mark the current block as free and do coalescing.
     size_t size = GET_SIZE(HDRP(bp));
     PUT(HDRP(bp), PACK(size,0));
     PUT(FTRP(bp), PACK(size,0));
     coalesce(bp);
+
     logg(3, "============ mm_free() ends ==============");
 }
 
@@ -446,9 +468,10 @@ void mm_free(void *bp)
 /**********************************************************
  * mm_malloc
  * Allocate a block of size bytes.
- * The type of search is determined by find_fit
- * The decision of splitting the block, or not is determined
- *   in place(..)
+ * First search through the segregated free list to see if
+ * there's a free block that fits. If so, return the block
+ * pointer of the free block and create a new free block from
+ * the difference. (in place() utility function)
  * If no block satisfies the request, the heap is extended
  **********************************************************/
 void *mm_malloc(size_t size)
@@ -492,7 +515,12 @@ void *mm_malloc(size_t size)
 
 /**********************************************************
  * mm_realloc
- * Implemented simply in terms of mm_malloc and mm_free
+ * If the size is smaller than the original block, simply
+ * return the original block.
+ * If the block is at the end of the heap, extend the heap
+ * to the required size and return. (This is a calibraion
+ * for realloc-bal.rep)
+ * Otherwise, simply call mm_free() and mm_malloc().
  *********************************************************/
 void *mm_realloc(void *ptr, size_t size)
 {
