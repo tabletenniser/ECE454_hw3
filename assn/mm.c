@@ -49,7 +49,7 @@ team_t team = {
 #define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
 #define CHUNKSIZE   (1<<5)      /* initial heap size (bytes) = 32 bytes, four words. This used to be 1<<7*/
 #define NUM_OF_FREE_LISTS 30
-#define SHIFT_SIZE 2
+#define SHIFT_SIZE 0
 #define LIMIT 100
 
 #define MAX(x,y) ((x) > (y)?(x) :(y))
@@ -193,8 +193,7 @@ void print_free_lists(){
         iter = free_block_lists[i];
         printf("%d: ", i);
         while (iter!=NULL) {
-        /* if (iter!=NULL) { */
-            printf("%p\t", iter);
+            printf("%p(header:%zx;size:%zx)\t", iter, GET(HDRP(iter)), GET_SIZE(HDRP(iter)));
             iter = (char *)GET(NEXT_FREE_BLKP(iter));
             if (iter!=NULL)
                 printf("%p\t", iter);
@@ -371,10 +370,13 @@ void * find_fit(size_t asize)
     int free_list_i=0;
     int count = 0;
     size_t smallest_bp_size = (size_t)-1;   // set to max size_t
-    for (free_list_i = 0; free_list_i<NUM_OF_FREE_LISTS; free_list_i++){
-        if ((1<<(free_list_i-SHIFT_SIZE-1))<asize){
+    /* printf("asize is: %d", asize); */
+    for (free_list_i = 1; free_list_i<NUM_OF_FREE_LISTS; free_list_i++){
+        /* if ((1<<(free_list_i+SHIFT_SIZE-1))<asize){ */
+        if ((1<<(free_list_i))<asize){
             continue;
         }
+        /* printf("free_list_i is: %d", free_list_i); */
         bp = free_block_lists[free_list_i];
         count = 0;
         while (bp != NULL && count < LIMIT){
@@ -456,7 +458,7 @@ int mm_init(void)
  **********************************************************/
 void mm_free(void *bp)
 {
-    logg(3, "============ mm_free() starts ==============");
+    logg(3, "\n============ mm_free() starts ==============");
     if (LOGGING_LEVEL>0)
         mm_check();
 	logg(1, "mm_free() with bp: %p; header: %zx(h); footer: %zx(h)", bp, GET(HDRP(bp)), GET(FTRP(bp)));
@@ -470,7 +472,7 @@ void mm_free(void *bp)
     PUT(FTRP(bp), PACK(size,0));
     coalesce(bp);
 
-    logg(3, "============ mm_free() ends ==============");
+    logg(3, "============ mm_free() ends ==============\n");
 }
 
 
@@ -485,7 +487,7 @@ void mm_free(void *bp)
  **********************************************************/
 void *mm_malloc(size_t size)
 {
-    logg(3, "============ mm_malloc() starts ==============");
+    logg(3, "\n============ mm_malloc() starts ==============");
     if (LOGGING_LEVEL>0)
         mm_check();
     size_t asize; /* adjusted block size */
@@ -501,7 +503,8 @@ void *mm_malloc(size_t size)
         asize = 2 * DSIZE;
     else
         asize = DSIZE * ((size + (DSIZE) + (DSIZE-1))/ DSIZE);
-    asize += DSIZE;     // For the prev / next free block.
+    /* asize += 2*DSIZE;     // For the prev / next free block. */
+    /* print_free_lists(); */
 
     /* Search the free list for a fit */
     if ((bp = find_fit(asize)) != NULL) {
@@ -517,7 +520,7 @@ void *mm_malloc(size_t size)
     logg(1, "mm_malloc(%zx(h)%zu(d)) returns bp: %p; with actual size: %zx", size, size, bp, asize);
     if (LOGGING_LEVEL>0)
         mm_check();
-    logg(3, "============ mm_malloc() ends ==============");
+    logg(3, "============ mm_malloc() ends ==============\n");
     return bp;
 
 }
@@ -533,7 +536,7 @@ void *mm_malloc(size_t size)
  *********************************************************/
 void *mm_realloc(void *ptr, size_t size)
 {
-    logg(3, "============ mm_realloc() starts ==============");
+    logg(3, "\n============ mm_realloc() starts ==============");
     if (LOGGING_LEVEL>0)
         mm_check();
     /* If size == 0 then this is just free, and we return NULL. */
@@ -558,7 +561,7 @@ void *mm_realloc(void *ptr, size_t size)
     asize += DSIZE;     // For the prev / next free block.
     if (asize < oldSize) {
         logg(2, "Old pointer is enough. bp: %p; oldSize: %zx; newSize: %zx", oldptr, oldSize, asize);
-        logg(3, "============ mm_realloc() ends ==============");
+        logg(3, "============ mm_realloc() ends ==============\n");
         return oldptr;
     }
 
@@ -576,7 +579,7 @@ void *mm_realloc(void *ptr, size_t size)
         PUT(FTRP(oldptr), PACK(asize, 1));
         PUT(HDRP(NEXT_BLKP(oldptr)), PACK(0, 1));
         mm_check();
-        logg(3, "============ mm_realloc() ends ==============");
+        logg(3, "============ mm_realloc() ends ==============\n");
         return oldptr;
     }
 
@@ -590,6 +593,6 @@ void *mm_realloc(void *ptr, size_t size)
       copySize = size;
     memcpy(newptr, oldptr, copySize);
     mm_free(oldptr);
-    logg(3, "============ mm_realloc() ends ==============");
+    logg(3, "============ mm_realloc() ends ==============\n");
     return newptr;
 }
