@@ -49,8 +49,7 @@ team_t team = {
 #define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
 #define CHUNKSIZE   (1<<5)      /* initial heap size (bytes) = 32 bytes, four words. This used to be 1<<7*/
 #define NUM_OF_FREE_LISTS 30
-#define SHIFT_SIZE 0
-#define LIMIT 100
+#define LIMIT 1
 
 #define MAX(x,y) ((x) > (y)?(x) :(y))
 
@@ -220,7 +219,7 @@ void add_free_block(void *bp){
     // Find the proper index to insert the block.
     int free_list_i = 0;
     int size = GET_SIZE(HDRP(bp));
-    while (size > (1 << (free_list_i-SHIFT_SIZE))){
+    while (size > (1 << (free_list_i))){
         free_list_i++;
     }
 
@@ -249,7 +248,7 @@ void remove_free_block(void *bp){
     // Find the proper index where the block should locates.
     int free_list_i = 0;
     int size = GET_SIZE(HDRP(bp));
-    while (size > (1 << (free_list_i-SHIFT_SIZE))){
+    while (size > (1 << (free_list_i))){
         free_list_i++;
     }
 
@@ -370,9 +369,7 @@ void * find_fit(size_t asize)
     int free_list_i=0;
     int count = 0;
     size_t smallest_bp_size = (size_t)-1;   // set to max size_t
-    /* printf("asize is: %d", asize); */
     for (free_list_i = 1; free_list_i<NUM_OF_FREE_LISTS; free_list_i++){
-        /* if ((1<<(free_list_i+SHIFT_SIZE-1))<asize){ */
         if ((1<<(free_list_i))<asize){
             continue;
         }
@@ -503,8 +500,10 @@ void *mm_malloc(size_t size)
         asize = 2 * DSIZE;
     else
         asize = DSIZE * ((size + (DSIZE) + (DSIZE-1))/ DSIZE);
-    /* asize += 2*DSIZE;     // For the prev / next free block. */
-    /* print_free_lists(); */
+
+    // Align it the other way to calibrate for binary-bal.rep.
+    if (asize % 32 == 0)
+        asize += DSIZE;
 
     /* Search the free list for a fit */
     if ((bp = find_fit(asize)) != NULL) {
