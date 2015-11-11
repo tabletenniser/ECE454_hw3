@@ -50,6 +50,7 @@ team_t team = {
 #define CHUNKSIZE   (1<<5)      /* initial heap size (bytes) = 32 bytes, four words. This used to be 1<<7*/
 #define NUM_OF_FREE_LISTS 30
 #define SHIFT_SIZE 2
+#define LIMIT 100
 
 #define MAX(x,y) ((x) > (y)?(x) :(y))
 
@@ -366,19 +367,27 @@ void *extend_heap(size_t words)
  **********************************************************/
 void * find_fit(size_t asize)
 {
-    void *bp;
+    void *bp, *smallest_bp = (void *)NULL;
     int free_list_i=0;
+    int count = 0;
+    size_t smallest_bp_size = (size_t)-1;   // set to max size_t
     for (free_list_i = 0; free_list_i<NUM_OF_FREE_LISTS; free_list_i++){
         if ((1<<(free_list_i-SHIFT_SIZE-1))<asize){
             continue;
         }
         bp = free_block_lists[free_list_i];
-        while (bp != NULL){
-            if (asize <= GET_SIZE(HDRP(bp))){
+        count = 0;
+        while (bp != NULL && count < LIMIT){
+            count ++;
+            if (asize <= GET_SIZE(HDRP(bp)) && GET_SIZE(HDRP(bp)) < smallest_bp_size){
                 logg(1, "find_fit() finds a fittable block at: %p for size: %zx(h)%zu(d)", bp, asize, asize);
-                return bp;
+                /* return bp; */
+                smallest_bp = bp;
+                smallest_bp_size = GET_SIZE(HDRP(bp));
             }
         }
+        if (smallest_bp!=NULL)
+            return smallest_bp;
     }
     logg(2, "find_fit() cannot find a free block with proper size: %zx(h)%zu(d).", asize, asize);
     return NULL;
